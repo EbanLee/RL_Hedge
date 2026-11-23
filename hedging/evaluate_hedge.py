@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from hedging.baselines import bs_delta_hedge, no_hedge
+from hedging.baselines import bs_delta_hedge, no_hedge, no_trade_band_hedge
 from functions.pnl import compute_pnl
 from functions.data_loader import load_market
 
@@ -50,6 +50,14 @@ def main() -> None:
         type=float,
         help="Option premium. Defaults to the mean payoff of the training paths.",
     )
+    parser.add_argument(
+        "--band-widths",
+        type=float,
+        nargs="+",
+        default=(0, 0.05, 0.1),
+        metavar="SHARES",
+        help="No-trade band half-widths in shares per option.",
+    )
     args = parser.parse_args()
 
     filename = f"market_{args.run_id}.pt"
@@ -66,23 +74,37 @@ def main() -> None:
         premium = payoff.mean().item()
 
     strike = market["metadata"]["config"]["market"]["K"]
+    delta_positions = bs_delta_hedge(
+        stock,
+        market["variance"],
+        market["time_to_maturity"],
+        strike=strike,
+    )
+
     positions_by_strategy = {
         "No Hedge": no_hedge(stock),
-        "BS Delta Hedge": bs_delta_hedge(
-            stock, market["variance"], market["time_to_maturity"], strike=strike
-        ),
+        "BS Delta Hedge": delta_positions,
     }
+
+    # No Trade Band with Delta Hedge
+    for width in args.band_widths:
+        positions_by_strategy[f"No-trade Band ({width})"] = no_trade_band_hedge(
+            delta_positions,
+            band_width=width,
+        )
 
     print(f"Run {args.run_id} | {args.split} | {len(stock):,} paths | K={strike:g}")
     print(f"Premium per option {premium:.6f}")
     print("Cost Rate uses stock trade value. Percentages in parentheses use the option premium.")
     if premium <= 0:
         print("Premium-based percentages require a positive premium.")
+    strategy_width = max(16, max(map(len, positions_by_strategy)))
     metric_width = 21
     metric_names = ("Mean P&L", "P&L std", "Loss ES95", "Mean cost")
     metric_headers = "  ".join(f"{label:^{metric_width}}" for label in metric_names)
-    print(f"{'Strategy':<16} {'Cost Rate':>10}  {metric_headers}".rstrip())
+    print(f"{'Strategy':<{strategy_width}} {'Cost Rate':>10}  {metric_headers}".rstrip())
     for cost_rate in args.cost_rates:
+        # print(f"[Cost Rate]: {cost_rate:>10.2%}")
         for name, positions in positions_by_strategy.items():
             pnl = compute_pnl(
                 stock, positions, payoff, premium=premium, cost_rate=cost_rate
@@ -95,7 +117,7 @@ def main() -> None:
                 percent = f"{amount / premium:.2%}" if premium > 0 else "N/A"
                 value = f"{amount:>10.6f} ({percent})"
                 metrics.append(f"{value:<{metric_width}}")
-            print(f"{name:<16} {cost_rate:>10.2%}  {'  '.join(metrics)}".rstrip())
+            print(f"{name:<{strategy_width}} {cost_rate:>10.2%}  {'  '.join(metrics)}".rstrip())
         print()
 
 

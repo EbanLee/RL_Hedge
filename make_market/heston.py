@@ -153,6 +153,7 @@ def calculate_variance_swap(V, I, params, tau):
     kappa = params["kappa"].unsqueeze(1)
     theta = params["theta"].unsqueeze(1)
 
+    # 미래 분산 예측하여 만기 손익 계산
     expected_remaining_variance = (
         theta * tau
         + (V - theta)

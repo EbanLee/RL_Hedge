@@ -45,3 +45,29 @@ def bs_delta_hedge(
     total_variance = current_variance * remaining_time
     d1 = (spot.log() - math.log(strike) + 0.5 * total_variance) / total_variance.sqrt()
     return 0.5 * (1 + torch.erf(d1 / math.sqrt(2)))
+
+def no_trade_band_hedge(
+    target_positions: torch.Tensor,
+    *,
+    band_width: float,
+) -> torch.Tensor:
+    """Keep the prior holding inside the band, or trade to its nearest edge."""
+    if target_positions.ndim != 2 or target_positions.shape[1] == 0:
+        raise ValueError("target_positions must have shape (n_paths, n_trade_dates)")
+    if not target_positions.is_floating_point():
+        raise TypeError("target_positions must be floating point")
+    if not math.isfinite(band_width) or band_width < 0:
+        raise ValueError("band_width must be finite and nonnegative")
+
+    positions = torch.empty_like(target_positions)
+    previous = torch.zeros_like(target_positions[:, 0])
+
+    for step, target in enumerate(target_positions.unbind(dim=1)):
+        previous = torch.clamp(
+            previous,
+            min=target - band_width,
+            max=target + band_width,
+        )
+        positions[:, step] = previous
+
+    return positions
